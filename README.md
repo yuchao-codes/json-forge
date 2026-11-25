@@ -1,2 +1,39 @@
-# json-forge
-Local JSON workbench for Chrome and Edge
+# JSON Forge
+
+在 Chrome 和 Edge 的独立标签页里处理 JSON。文件读取、转换、搜索和比较都在浏览器本地完成。
+
+- **转换**提供格式化、压缩、字符串转义和单层反转义，可复制或下载完整结果。格式化和压缩保留数字字面量、字段顺序及重复键。
+- **Diff**将两份 JSON 统一缩进后按行比较，支持差异跳转和统一格式的补丁下载。将补丁应用到统一缩进后的左侧 JSON，可以还原统一缩进后的右侧 JSON。
+- **搜索**用 Ctrl+F 或 ⌘+F 打开，可在输入、结果和 Diff 两侧查找全文。勾选「正则」后直接输入表达式，例如 `\d+`，并可切换大小写匹配。大文件可以直接跳到当前编辑片段以外的匹配项。
+
+## 构建和安装
+
+使用 Node.js 22.18+ 和 pnpm 12。
+
+    pnpm install
+    pnpm build
+    pnpm build --browser edge
+
+打开 Chrome 的 chrome://extensions 或 Edge 的 edge://extensions，启用开发人员模式，选择「加载已解压的扩展程序」。Chrome 选择 .output/chrome-mv3，Edge 选择 .output/edge-mv3。安装后点扩展图标打开工作台。
+
+## 验证
+
+    pnpm test
+    pnpm compile
+
+### 浏览器实测
+
+Windows 11，Intel Core i7-12700H，31.8 GiB 内存。使用独立浏览器配置安装打包扩展，页面设为离线。下表是一次合成样本测试从操作触发到界面显示结果的耗时。1、10 MiB 样本为重复记录，Diff 只改动末尾记录。50 MiB 样本是单行 JSON 字符串，搜索词位于末尾。
+
+| 浏览器 | 数据量 | 格式化 | 压缩 | 全文搜索 | Diff |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Chrome 158.0.8127.89 | 1 MiB | 31 ms | 38 ms | 140 ms | 36 ms |
+| Chrome 158.0.8127.89 | 10 MiB | 92 ms | 60 ms | 308 ms | 218 ms |
+| Chrome 158.0.8127.89 | 50 MiB | 236 ms | — | 1,117 ms | — |
+| Edge 158.0.4370.33 | 1 MiB | 30 ms | 40 ms | 143 ms | 41 ms |
+| Edge 158.0.4370.33 | 10 MiB | 91 ms | 67 ms | 300 ms | 218 ms |
+| Edge 158.0.4370.33 | 50 MiB | 192 ms | — | 1,137 ms | — |
+
+两款浏览器在记录期间都未报告工作台主线程长任务。50 MiB 样本测试中，从发起转义、滚动和输入到取消后的下一帧，Chrome 用时 11 ms，Edge 用时 10 ms。独立浏览器的各进程工作集采样峰值分别为 1,292 MiB 和 1,617 MiB，包含浏览器自身及共享页。10 MiB 样本的工作台页面 JS 堆读数均为 6.6 MiB。
+
+当前单个输入上限为 64 MiB，单次转换输出上限为 96 MiB。深层嵌套或差异过多的对比会更早触发各自的处理预算。超限时工作台保留输入并显示原因。

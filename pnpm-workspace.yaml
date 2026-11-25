@@ -1,0 +1,2 @@
+patchedDependencies:
+  web-ext@10.8.0: patches/web-ext@10.8.0.patch
