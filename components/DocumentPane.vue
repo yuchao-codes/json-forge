@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { json } from '@codemirror/lang-json';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { Compartment, EditorState, StateEffect, StateField, Transaction } from '@codemirror/state';
+import type { Extension, Text } from '@codemirror/state';
 import { Decoration, EditorView, keymap, lineNumbers, WidgetType } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
-import { canShowFull, PREVIEW_LENGTH } from '@/lib/workbench/document';
-import type { Preview } from '@/lib/workbench/document';
+import { MAX_INLINE_PASTE, wrapColumnsFor } from '@/lib/workbench/document';
+import { jsonFolding, revealFoldedRange } from '@/lib/workbench/folding';
 import type { Match } from '@/lib/workbench/search';
 
 const props = defineProps<{
   title: string;
-  preview: Preview;
+  text: Text;
+  wrapColumns: number;
   fileName?: string;
   allowFile?: boolean;
   changes?: readonly Match[];
@@ -23,17 +25,17 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  edit: [text: string];
+  edit: [text: Text, wrapColumns: number];
+  largePaste: [from: number, to: number, text: string];
   clear: [];
   importSource: [value: File];
-  page: [offset: number];
   activate: [];
 }>();
 
 const host = ref<HTMLDivElement>();
 const chooseFile = ref<HTMLInputElement>();
-const partial = computed(() => props.preview.text.length < props.preview.total);
-const gutterConfig = new Compartment();
+const wrapping = new Compartment();
+const noWrapping: Extension = [];
 const marksEffect = StateEffect.define<DecorationSet>();
 const searchCaret = new class extends WidgetType {
   toDOM(view: EditorView) {
@@ -58,71 +60,77 @@ const highlight = HighlightStyle.define([
   { tag: [tags.bool, tags.null], color: '#cbaaff' },
 ]);
 let view: EditorView | undefined;
-let updating = false;
 
 function decorations() {
-  const { start, text } = props.preview;
-  function local(range: Match, kind: string) {
-    const from = Math.max(0, range.from - start);
-    const to = Math.min(text.length, range.to - start);
+  const length = props.text.length;
+  function mark(range: Match, kind: string) {
+    const from = Math.max(0, range.from);
+    const to = Math.min(length, range.to);
     return from < to ? [Decoration.mark({ class: 'mark-' + kind }).range(from, to)] : [];
   }
-  const ranges = (props.changes ?? []).flatMap((range) => local(range, props.changeKind ?? 'added'));
+  const ranges = (props.changes ?? []).flatMap((range) => mark(range, props.changeKind ?? 'added'));
   const { focusRange, focusKind } = props;
   if (focusRange && focusKind !== 'difference') {
     if (focusKind === 'search' && focusRange.from === focusRange.to) {
-      const offset = focusRange.from - start;
-      if (offset >= 0 && offset <= text.length) {
-        ranges.push(Decoration.widget({ widget: searchCaret }).range(offset));
+      if (focusRange.from <= length) {
+        ranges.push(Decoration.widget({ widget: searchCaret }).range(focusRange.from));
       }
     } else {
-      ranges.push(...local(focusRange, focusKind ?? 'search'));
+      ranges.push(...mark(focusRange, focusKind ?? 'search'));
     }
   }
   return Decoration.set(ranges, true);
 }
 
-function synchronize() {
+function synchronize(previousFocus?: Match) {
   if (!view) return;
-  const { preview, focusRange } = props;
-  const changed = view.state.doc.toString() !== preview.text;
-  updating = true;
-  try {
-    view.dispatch({
-      changes: changed ? { from: 0, to: view.state.doc.length, insert: preview.text } : undefined,
-      effects: [
-        gutterConfig.reconfigure(lineNumbers({ formatNumber: (line) => String(line + preview.line - 1) })),
-        marksEffect.of(decorations()),
-        ...(focusRange
-          ? [EditorView.scrollIntoView(Math.max(0, Math.min(preview.text.length, focusRange.from - preview.start)),
-            { y: 'center', x: 'center' })]
-          : changed ? [EditorView.scrollIntoView(0)] : []),
-      ],
-      selection: changed ? { anchor: 0 } : undefined,
-      annotations: Transaction.addToHistory.of(false),
-    });
-    if (changed) view.scrollDOM.scrollLeft = 0;
-  } finally {
-    updating = false;
+  const { text, focusRange } = props;
+  const replaced = view.state.doc !== text;
+  if (replaced) {
+    view.setState(createState());
+    view.scrollDOM.scrollTop = 0;
+    view.scrollDOM.scrollLeft = 0;
   }
+  const wrap = props.wrapColumns > 0 ? EditorView.lineWrapping : noWrapping;
+  view.dispatch({
+    effects: [
+      ...(wrapping.get(view.state) !== wrap ? [wrapping.reconfigure(wrap)] : []),
+      marksEffect.of(decorations()),
+      ...(focusRange && (replaced || focusRange !== previousFocus)
+        ? [...revealFoldedRange(view.state, focusRange),
+          EditorView.scrollIntoView(Math.min(text.length, focusRange.from), { y: 'center', x: 'center' })]
+        : []),
+    ],
+    annotations: Transaction.addToHistory.of(false),
+  });
 }
 
-onMounted(() => {
-  view = new EditorView({
-    parent: host.value,
-    doc: props.preview.text,
+function createState() {
+  return EditorState.create({
+    doc: props.text,
     extensions: [
       EditorState.lineSeparator.of('\n'),
       EditorView.contentAttributes.of({ 'aria-label': props.title, spellcheck: 'false', tabindex: '0' }),
-      gutterConfig.of(lineNumbers()),
+      lineNumbers(),
+      wrapping.of(props.wrapColumns > 0 ? EditorView.lineWrapping : noWrapping),
       marksField,
       json(),
+      jsonFolding,
       syntaxHighlighting(highlight),
       history(),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.updateListener.of((update) => {
-        if (!update.docChanged || updating) return;
-        emit('edit', update.state.doc.toString());
+        if (!update.docChanged) return;
+        const { doc } = update.state;
+        let wrapColumns = Math.min(props.wrapColumns, wrapColumnsFor(doc.length));
+        update.changes.iterChangedRanges((_from, _to, from, to) => {
+          while (from <= to) {
+            const line = doc.lineAt(from);
+            wrapColumns = Math.max(wrapColumns, wrapColumnsFor(line.length));
+            from = line.to + 1;
+          }
+        });
+        emit('edit', doc, wrapColumns);
       }),
       EditorView.domEventHandlers({
         focus: () => { emit('activate'); },
@@ -130,27 +138,31 @@ onMounted(() => {
           const paste = event.clipboardData?.getData('text/plain');
           if (paste === undefined) return false;
           const selection = editor.state.selection.main;
-          const text = editor.state.sliceDoc(0, selection.from) + paste + editor.state.sliceDoc(selection.to);
           event.preventDefault();
-          if (partial.value ? text.length <= 2 * PREVIEW_LENGTH : canShowFull(text)) {
+          if (paste.length > MAX_INLINE_PASTE) {
+            emit('largePaste', selection.from, selection.to, paste);
+          } else {
             editor.dispatch({
               changes: { from: selection.from, to: selection.to, insert: paste },
               selection: { anchor: selection.from + paste.length },
               scrollIntoView: true,
               userEvent: 'input.paste',
             });
-          } else {
-            emit('edit', text);
           }
           return true;
         },
       }),
     ],
   });
+}
+
+onMounted(() => {
+  view = new EditorView({ parent: host.value, state: createState() });
   synchronize();
 });
 
-watch(() => [props.preview, props.focusRange, props.focusKind, props.changes], synchronize);
+watch(() => [props.text, props.wrapColumns, props.focusRange, props.focusKind, props.changes] as const,
+  (_values, previous) => synchronize(previous[2]));
 onUnmounted(() => view?.destroy());
 
 function onFile(event: Event) {
@@ -168,26 +180,16 @@ function onFile(event: Event) {
         <h2>{{ title }}</h2>
         <span v-if="fileName" class="file-name" :title="fileName">{{ fileName }}</span>
       </div>
-      <div v-if="allowFile || preview.total" class="pane-actions">
+      <div v-if="allowFile || text.length" class="pane-actions">
         <input v-if="allowFile" ref="chooseFile" class="visually-hidden" tabindex="-1" type="file"
           :aria-label="'打开文件 · ' + title" @change="onFile">
         <button v-if="allowFile" class="text-button" type="button" @click="chooseFile?.click()">打开文件</button>
-        <button v-if="preview.total" class="text-button" type="button" @click="emit('clear')">清空</button>
+        <button v-if="text.length" class="text-button" type="button" @click="emit('clear')">清空</button>
       </div>
     </header>
-    <div ref="host" class="editor-host"></div>
+    <div ref="host" class="editor-host" :style="{ '--editor-wrap-width': wrapColumns + 'ch' }"></div>
     <footer class="pane-footer">
-      <span v-if="partial">
-        当前编辑片段 · {{ (preview.start + (preview.text.length ? 1 : 0)).toLocaleString() }}–{{ (preview.start + preview.text.length).toLocaleString() }}
-        / {{ preview.total.toLocaleString() }}
-      </span>
-      <span v-else>{{ preview.total.toLocaleString() }} 字符</span>
-      <div v-if="partial" class="pane-actions">
-        <button class="text-button" type="button" :disabled="preview.start === 0"
-          @click="emit('page', Math.max(0, preview.start - PREVIEW_LENGTH))">上一段</button>
-        <button class="text-button" type="button" :disabled="preview.start + preview.text.length >= preview.total"
-          @click="emit('page', preview.start + preview.text.length)">下一段</button>
-      </div>
+      <span>{{ text.length.toLocaleString() }} 字符</span>
     </footer>
   </section>
 </template>

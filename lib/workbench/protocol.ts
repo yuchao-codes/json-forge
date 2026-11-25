@@ -1,5 +1,5 @@
 import type { Comparison } from './diff.ts';
-import type { DocumentData, Preview, Source } from './document.ts';
+import type { DocumentData, Source } from './document.ts';
 import type { Match } from './search.ts';
 
 export type Transform = 'format' | 'minify' | 'escape' | 'unescape';
@@ -7,7 +7,6 @@ export type Transform = 'format' | 'minify' | 'escape' | 'unescape';
 export interface Position {
   index: number;
   match: Match;
-  preview: Preview;
 }
 
 export interface SearchResult {
@@ -24,11 +23,9 @@ export interface Failure {
 }
 
 interface Commands {
-  import: { request: { source: Source; offset?: number; maxBytes?: number }; result: DocumentData };
+  import: { request: { source: Source; maxBytes?: number }; result: DocumentData };
   transform: { request: { operation: Transform; source: Source }; result: DocumentData };
   compare: { request: { left: Source; right: Source }; result: Comparison };
-  preview: { request: { source: Source; offset: number; center?: boolean }; result: Preview };
-  read: { request: { source: Source }; result: string };
   export: { request: { source: Source }; result: Blob };
   search: { request: { source: Source; query: string; caseSensitive: boolean; regex: boolean }; result: SearchResult };
   position: { request: { index: number }; result: Position };

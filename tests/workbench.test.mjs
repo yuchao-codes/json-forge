@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { foldEffect, foldedRanges } from '@codemirror/language';
+import { EditorState } from '@codemirror/state';
 import { applyPatch } from 'diff';
 import { compareJson } from '../lib/workbench/diff.ts';
-import { downloadBlob, makeDocument, makePreview, readSource, replacePreview } from '../lib/workbench/document.ts';
+import { downloadBlob, makeDocument, readSource } from '../lib/workbench/document.ts';
 import { escapeText, rewriteJson, unescapeText } from '../lib/workbench/json-text.ts';
+import { jsonFolding, revealFoldedRange } from '../lib/workbench/folding.ts';
 import { TextSearch } from '../lib/workbench/search.ts';
 
 test('formats JSON without replacing number spellings, duplicate keys or escape sequences', () => {
@@ -46,33 +49,32 @@ test('text download preserves a decoded isolated surrogate', async () => {
   assert.equal(await readSource(blob), value);
 });
 
-test('bounded preview locates a distant UTF-16 range while retaining the full source', async () => {
-  const text = 'x'.repeat(20000) + '😃\n' + 'tail'.repeat(20000);
-  const { source, preview } = makeDocument(text);
-  assert.equal(preview.start, 0);
-  assert.ok(preview.text.length < text.length);
-  const position = makePreview(text, 20000, true);
-  assert.match(position.text, /😃\ntail/);
-  assert.equal(text.slice(position.start, position.start + position.text.length), position.text);
-  assert.equal(await readSource(source), text);
+test('large documents retain all text and only require wrapping if a line is long', async () => {
+  for (const [text, wrapColumns] of [
+    ['{"key":"😃"}\r\n'.repeat(30000), 0],
+    ['first\n' + 'x'.repeat(200000) + '😃\nlast', 1],
+  ]) {
+    const data = makeDocument(text);
+    assert.ok(data.source instanceof Blob);
+    assert.equal(data.wrapColumns, wrapColumns);
+    assert.equal(await readSource(data.source), text);
+  }
   await assert.rejects(readSource(new File([Uint8Array.of(0xc3, 0x28)], 'bad.json')), /UTF-8/);
 });
 
-test('editing multiple and overlapping preview spans preserves the rest of the document', async () => {
-  const base = 'start 🎉middle end';
-  const source = new Blob([base]);
-  const edit = (document, from, to, text) => replacePreview(document, {
-    start: from, total: text.length, text: text.slice(from, to), line: 1,
-  }, 'NEW');
-  const first = edit(source, 8, 14, base);
-  const updated = 'start 🎉NEW end';
-  assert.equal(await readSource(first.source), updated);
-  assert.equal(first.preview.total, updated.length);
-  const second = edit(first.source, 10, 14, updated);
-  const next = 'start 🎉NENEWd';
-  assert.equal(await readSource(second.source), next);
-  const third = replacePreview(second.source, { start: 0, total: next.length, text: 'start ', line: 1 }, '');
-  assert.equal(await readSource(third.source), '🎉NENEWd');
+test('revealing a search position unfolds its ancestors while preserving sibling folds', () => {
+  const doc = '{"first":[{"match":1}],"second":[2]}';
+  const outer = { from: doc.indexOf('[') + 1, to: doc.indexOf(']') };
+  const inner = { from: doc.indexOf('{', 1) + 1, to: doc.indexOf('}') };
+  const sibling = { from: doc.lastIndexOf('[') + 1, to: doc.lastIndexOf(']') };
+  const state = EditorState.create({ doc, extensions: jsonFolding }).update({
+    effects: [outer, inner, sibling].map((range) => foldEffect.of(range)),
+  }).state;
+  const next = state.update({ effects: revealFoldedRange(state, { from: inner.from, to: inner.from }) }).state;
+  const remaining = [];
+  foldedRanges(next).between(0, doc.length, (from, to) => remaining.push({ from, to }));
+  assert.deepEqual(remaining, [sibling]);
+  assert.equal(next.doc, state.doc);
 });
 
 test('comparison skips whitespace, marks reordered keys, and exports a real unified patch', async () => {

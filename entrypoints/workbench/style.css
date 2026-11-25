@@ -144,7 +144,21 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .editor-host .cm-gutters { background: #151c27; color: #8b9bb3; border-right: 1px solid #252f3e; }
 .editor-host .cm-gutterElement { padding-inline: 8px; }
 .editor-host .cm-content { padding-block: 9px; caret-color: var(--accent); }
+.editor-host .cm-lineWrapping { min-width: calc(var(--editor-wrap-width) + 20px); }
 .editor-host .cm-line { padding-inline: 9px; }
+.editor-host .json-fold-button {
+  min-height: 0;
+  padding: 0 .23em;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1;
+  vertical-align: baseline;
+}
+.editor-host .json-fold-button:enabled:hover { color: var(--accent); }
+.editor-host .json-fold-placeholder { background: #222f3e; color: var(--accent); }
 .editor-host .cm-focused { outline: 1px solid #447b6a; outline-offset: -1px; }
 .editor-host .cm-selectionBackground, .editor-host .cm-focused .cm-selectionBackground { background: #39556c; }
 .mark-added { background: #285248; }

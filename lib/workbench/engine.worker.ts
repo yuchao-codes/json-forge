@@ -1,5 +1,5 @@
 import { compareJson } from './diff.ts';
-import { downloadBlob, MAX_OUTPUT_BYTES, WorkbenchError, makeDocument, makePreview, readSource } from './document.ts';
+import { documentWrapColumns, downloadBlob, MAX_OUTPUT_BYTES, WorkbenchError, makeDocument, readSource } from './document.ts';
 import { escapeText, rewriteJson, unescapeText } from './json-text.ts';
 import type { Failure, Position, Request, Result, Command, Response } from './protocol.ts';
 import { TextSearch } from './search.ts';
@@ -9,19 +9,16 @@ let generation = 0;
 
 function locate(index: number): Position | undefined {
   const match = search?.at(index);
-  if (!search || !match) return;
-  return { index, match, preview: makePreview(search.text, match.from, true) };
+  if (!match) return;
+  return { index, match };
 }
 
 async function dispatch(request: Request): Promise<Result<Command> | undefined> {
   switch (request.type) {
     case 'import': {
       const text = await readSource(request.source, request.maxBytes);
-      const preview = makePreview(text, request.offset);
-      if (request.source instanceof File && preview.text.length < text.length) {
-        return { source: request.source, preview };
-      }
-      return { source: makeDocument(text).source, preview };
+      if (request.source instanceof File) return { source: request.source, wrapColumns: documentWrapColumns(text) };
+      return makeDocument(text);
     }
     case 'transform': {
       const text = await readSource(request.source);
@@ -35,10 +32,6 @@ async function dispatch(request: Request): Promise<Result<Command> | undefined> 
     }
     case 'compare':
       return compareJson(request.left, request.right);
-    case 'preview':
-      return makePreview(await readSource(request.source, MAX_OUTPUT_BYTES), request.offset, request.center);
-    case 'read':
-      return readSource(request.source, MAX_OUTPUT_BYTES);
     case 'export':
       return downloadBlob(await readSource(request.source, MAX_OUTPUT_BYTES));
     case 'search': {
