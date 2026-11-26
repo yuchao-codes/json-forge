@@ -1,6 +1,6 @@
 {
   "name": "json-forge",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Local JSON workbench for Chrome and Edge",
   "type": "module",
